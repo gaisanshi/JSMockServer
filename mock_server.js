@@ -1,6 +1,8 @@
 /**
  * Copyright [2015] [Gary Gai]
  *
+ * Version: 0.0.1
+ * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -59,12 +61,12 @@
 exports.MockServer = (function () {
     'use strict';
 
-    var isCasperInUsed = function() {
+    var isCasperInUsed = function () {
         return (typeof casper !== "undefined" && casper !== null && casper.constructor.name === "Casper");
     };
 
 
-    var server = require('webserver').create();
+    var server = null;
 
     var mockServer = {};
 
@@ -82,12 +84,34 @@ exports.MockServer = (function () {
      * @returns mockServer
      */
     var start = function (port) {
-        _port = port;
-        if (_isServerUp) {
+
+        var thisPort = 0;
+        if (isString(port)) {
+            thisPort = parseInt(port.trim());
+        } else if (isNumber(port)) {
+            thisPort = port;
+        } else {
+            var msg = "Invalid port number: " + port;
+            formatPrint(msg);
+            throw msg;
+        }
+
+        if (thisPort > 49151 || thisPort < 1025) {
+            var msg = "Port number is out of the range[1025-49151]: " + port;
+            formatPrint(msg);
+            throw msg;
+        }
+
+        if (_isServerUp && thisPort === _port) {
             formatPrint("Mock Server has started already, no need to restart");
             reset();
             return mockServer;
+        } else if (_isServerUp && thisPort !== _port) {
+            close();
         }
+
+        _port = thisPort;
+        server = require('webserver').create();
 
         /**
          * Add the request pattern the onResourceRequested event
@@ -99,8 +123,13 @@ exports.MockServer = (function () {
             //console.log(JSON.stringify(request, null, 4));
 
             if (Object.keys(_currentReq).length !== 0) {
-                formatPrint("You have .when() been called, but NO .response() following to define the expected response.");
+                var msg = "You have .when() been called, but NO .response() following to define the expected response.";
+                formatPrint(msg);
+                response.write(msg);
+                response.close();
+                throw msg;
             }
+
             var isMatched = false;
             for (var i = 0; i < _mapping.length && !isMatched; i++) {
                 var expReq = _mapping[i].request;
@@ -133,12 +162,14 @@ exports.MockServer = (function () {
                         var responseText = expResp.responseText;
                         if (!isString(responseText) && expResp.responseFile) {
                             try {
+                                console.log(request.url + " will be served from file " + expResp.responseFile);
                                 var fs = require('fs');
                                 responseText = fs.read(expResp.responseFile);
                             } catch (err) {
                                 formatPrint(err);
                             }
                         }
+
 
                         if (!isString(responseText)) {
                             responseText = "";
@@ -168,7 +199,9 @@ exports.MockServer = (function () {
 
         var statusLog = function (isUp) {
             if (!isUp) {
-                formatPrint("Mock Server is NOT started successfully");
+                var msg = "Mock Server is NOT started successfully.";
+                formatPrint(msg);
+                throw msg;
             } else {
                 console.log("Mock Server is up");
             }
@@ -186,9 +219,13 @@ exports.MockServer = (function () {
      * @returns mockServer
      */
     var close = function () {
-        //TODO: Phantom JS has not implemented this method
         reset();
-        return mockServer;
+        _port = 0;
+        _isServerUp = false;
+        if (server !== null) {
+            server.close();
+            server = null;
+        }
     };
 
     /**
@@ -213,7 +250,9 @@ exports.MockServer = (function () {
      */
     var response = function (resp) {
         if (Object.keys(_currentReq).length === 0) {
-            formatPrint("Please call .when() to set the request pattern first");
+            var message = "Please call .when() to set the request pattern first"
+            formatPrint(message);
+            throw message;
         } else {
             _mapping.push({
                 "request": _currentReq,
@@ -249,7 +288,7 @@ exports.MockServer = (function () {
     var addToResourceRequestedEvent = function () {
 
         //validation
-        if (_mapping.length === 0 || _port === '0' || _port === 0) {
+        if (_port === '0' || _port === 0) {
             return mockServer;
         }
 
@@ -264,9 +303,7 @@ exports.MockServer = (function () {
                 _existingOnResourceRequested(casper, requestData, request);
             }
 
-            for (var i = 0; i < _mapping.length; i++) {
-                var expReq = _mapping[i].request;
-
+            var changeUrl = function (expReq) {
                 if (
                     (!expReq.method || expReq.method.toUpperCase() === requestData.method)  //The HTTP Method
                     && (!expReq.url || requestData.url.indexOf(expReq.url) >= 0 || new RegExp(expReq.url).test(requestData.url)) //The url include the parameters
@@ -280,13 +317,24 @@ exports.MockServer = (function () {
                     };
 
                     var location = getLocation(requestData.url);
+                    location.protocol = "http";
                     location.host = "127.0.0.1";
                     location.port = _port;
 
                     console.log("Redirect the call to the mock server: '" + requestData.url + "' -> '" + location.href + "'");
                     request.changeUrl(location.href);
                 }
+            };
+
+            for (var i = 0; i < _mapping.length; i++) {
+                var expReq = _mapping[i].request;
+                changeUrl(expReq);
             }
+
+            if (Object.keys(_currentReq).length !== 0) {
+                changeUrl(_currentReq);
+            }
+
         };
 
 
@@ -303,11 +351,11 @@ exports.MockServer = (function () {
         return _isServerUp;
     };
 
-    var isString = function(myVar) {
+    var isString = function (myVar) {
         return (typeof myVar === 'string' || myVar instanceof String);
     };
 
-    var isNumber = function(myVar) {
+    var isNumber = function (myVar) {
         return (typeof myVar === 'number' || myVar instanceof Number);
     };
 
@@ -327,6 +375,7 @@ exports.MockServer = (function () {
 
     if (!mockServer.hasOwnProperty("start")) {
         mockServer.start = start;
+        mockServer.close = close;
         mockServer.when = when;
         mockServer.response = response;
         mockServer.reset = reset;
